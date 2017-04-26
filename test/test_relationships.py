@@ -1,5 +1,6 @@
 from neomodel import (StructuredNode, RelationshipTo, RelationshipFrom,
         Relationship, StringProperty, IntegerProperty, StructuredRel, One)
+from neomodel.exception import (RelationshipCycle)
 
 
 class Person(StructuredNode):
@@ -7,6 +8,8 @@ class Person(StructuredNode):
     age = IntegerProperty(index=True)
     is_from = RelationshipTo('Country', 'IS_FROM')
     knows = Relationship(u'Person', 'KNOWS')  # use unicode to check issue
+    children = RelationshipTo('Person', 'HAS_CHILD', acyclic=True)
+    parent = RelationshipFrom('Person', 'IS_PARENT', acyclic=True)
 
     @property
     def special_name(self):
@@ -170,3 +173,38 @@ def test_props_relationship():
     else:
         assert False
 
+def test_acyclic_relationships():
+    gp = Person(name="Grandparent", age=70).save()
+    assert gp
+
+    p = Person(name="Parent", age=40).save()
+    assert p
+
+    c = Person(name="Child", age=10).save()
+    assert c
+
+    gp.children.connect(p)
+    p.children.connect(c)
+    c.parent.connect(p)
+    p.parent.connect(gp)
+
+    try:
+        c.children.connect(gp)
+    except RelationshipCycle:
+        assert True
+    else:
+        assert False
+
+    try:
+        gp.parent.connect(c)
+    except RelationshipCycle:
+        assert True
+    else:
+        assert False
+
+    try:
+        c.children.connect(c)
+    except RelationshipCycle:
+        assert True
+    else:
+        assert False

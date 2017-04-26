@@ -1,7 +1,7 @@
 import sys
 import functools
 from importlib import import_module
-from .exception import NotConnected
+from .exception import NotConnected, RelationshipCycle
 from .util import deprecated
 from .match import OUTGOING, INCOMING, EITHER, _rel_helper, Traversal, NodeSet
 from .relationship import StructuredRel
@@ -55,6 +55,25 @@ class RelationshipManager(object):
         if not hasattr(obj, 'id'):
             raise ValueError("Can't perform operation on unsaved node " + repr(obj))
 
+    def _check_relationship_cycle(self, node):
+        """check if creating a relationship to a node would create a cycle in the graph"""
+        def check_paths(rel_stmt):
+            stmt = "MATCH " + rel_stmt + " WHERE id(start)={self} AND id(end)={end} RETURN r"
+            params = dict(end=node.id)
+            results, _ = self.source.cypher(stmt, params)
+            if results:
+                raise RelationshipCycle("Connecting node would create a graph cycle for an acyclic relationship")
+
+        if self.source.id == node.id:
+            raise RelationshipCycle("Creating relationship to source would create a graph cycle for an acylic relationship")
+
+        if self.definition['direction'] == OUTGOING:
+            rel_stmt = "(end)-[r:{}*]->(start)".format(self.definition['relation_type'])
+            check_paths(rel_stmt)
+        elif self.definition['direction'] == INCOMING:
+            rel_stmt = "(end)<-[r:{}*]-(start)".format(self.definition['relation_type'])
+            check_paths(rel_stmt)
+
     @check_source
     def connect(self, node, properties=None):
         """
@@ -70,6 +89,9 @@ class RelationshipManager(object):
         if not self.definition['model'] and properties:
             raise NotImplementedError("Relationship properties without " +
                     "using a relationship model is no longer supported")
+
+        if 'acyclic' in self.definition and self.definition['acyclic']:
+            self._check_relationship_cycle(node)
 
         params = {}
         rel_model = self.definition['model']
@@ -322,7 +344,7 @@ class RelationshipManager(object):
 
 
 class RelationshipDefinition(object):
-    def __init__(self, relation_type, cls_name, direction, manager=RelationshipManager, model=None):
+    def __init__(self, relation_type, cls_name, direction, manager=RelationshipManager, model=None, acyclic=False):
         self.module_name = sys._getframe(4).f_globals['__name__']
         if '__file__' in sys._getframe(4).f_globals:
             self.module_file = sys._getframe(4).f_globals['__file__']
@@ -332,6 +354,7 @@ class RelationshipDefinition(object):
         self.definition['relation_type'] = relation_type
         self.definition['direction'] = direction
         self.definition['model'] = model
+        self.definition['acyclic'] = acyclic
 
     def _lookup_node_class(self):
         if not isinstance(self._raw_class, basestring):
@@ -382,22 +405,22 @@ class ZeroOrMore(RelationshipManager):
     description = "zero or more relationships"
 
 
-def _relate(cls_name, direction, rel_type, cardinality=None, model=None):
+def _relate(cls_name, direction, rel_type, cardinality=None, model=None, acyclic=False):
     if not isinstance(cls_name, (basestring, object)):
         raise ValueError('Expected class name or class got ' + repr(cls_name))
     from .relationship import StructuredRel # TODO
 
     if model and not issubclass(model, (StructuredRel,)):
         raise ValueError('model must be a StructuredRel')
-    return RelationshipDefinition(rel_type, cls_name, direction, cardinality, model)
+    return RelationshipDefinition(rel_type, cls_name, direction, cardinality, model, acyclic)
 
 
-def RelationshipTo(cls_name, rel_type, cardinality=ZeroOrMore, model=None):
-    return _relate(cls_name, OUTGOING, rel_type, cardinality, model)
+def RelationshipTo(cls_name, rel_type, cardinality=ZeroOrMore, model=None, acyclic=False):
+    return _relate(cls_name, OUTGOING, rel_type, cardinality, model, acyclic)
 
 
-def RelationshipFrom(cls_name, rel_type, cardinality=ZeroOrMore, model=None):
-    return _relate(cls_name, INCOMING, rel_type, cardinality, model)
+def RelationshipFrom(cls_name, rel_type, cardinality=ZeroOrMore, model=None, acyclic=False):
+    return _relate(cls_name, INCOMING, rel_type, cardinality, model, acyclic)
 
 
 def Relationship(cls_name, rel_type, cardinality=ZeroOrMore, model=None):

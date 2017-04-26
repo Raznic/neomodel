@@ -73,6 +73,11 @@ class NotConnected(Exception):
         return msg
 
 
+class RelationshipCycle(Exception):
+    def __init__(self, msg):
+        self.message = msg
+
+
 def _get_correct_dne_obj(cls, message):
     app_label, class_name = cls.rsplit(".", 1)
     neo_app = importlib.import_module(app_label)
