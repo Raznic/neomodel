@@ -5,7 +5,7 @@ from .exception import NotConnected, RelationshipCycle
 from .util import deprecated
 from .match import OUTGOING, INCOMING, EITHER, _rel_helper, Traversal, NodeSet
 from .relationship import StructuredRel
-
+from .core import db
 
 # basestring python 3.x fallback
 try:
@@ -55,24 +55,43 @@ class RelationshipManager(object):
         if not hasattr(obj, 'id'):
             raise ValueError("Can't perform operation on unsaved node " + repr(obj))
 
+    def _directional_rel(self):
+        """check if relationship definition is directional"""
+        if self.definition['direction'] == OUTGOING or self.definition['direction'] == INCOMING:
+            return True
+        return False
+
     def _check_relationship_cycle(self, node):
         """check if creating a relationship to a node would create a cycle in the graph"""
-        def check_paths(rel_stmt):
-            stmt = "MATCH " + rel_stmt + " WHERE id(start)={self} AND id(end)={end} RETURN r"
-            params = dict(end=node.id)
-            results, _ = self.source.cypher(stmt, params)
-            if results:
-                raise RelationshipCycle("Connecting node would create a graph cycle for an acyclic relationship")
-
         if self.source.id == node.id:
             raise RelationshipCycle("Creating relationship to source would create a graph cycle for an acylic relationship")
 
         if self.definition['direction'] == OUTGOING:
             rel_stmt = "(end)-[r:{}*]->(start)".format(self.definition['relation_type'])
-            check_paths(rel_stmt)
-        elif self.definition['direction'] == INCOMING:
+        else:
             rel_stmt = "(end)<-[r:{}*]-(start)".format(self.definition['relation_type'])
-            check_paths(rel_stmt)
+
+        stmt = "MATCH " + rel_stmt + " WHERE id(start)={self} AND id(end)={end} RETURN r"
+        params = dict(end=node.id)
+        results, _ = self.source.cypher(stmt, params)
+        if results:
+            raise RelationshipCycle("Connecting node would create a graph cycle for an acyclic relationship")
+
+    def _connect_node(self, node, stmt, params):
+        """helper method for creating relationships between nodes"""
+        results = meta = None
+        if self.definition['acyclic'] and self._directional_rel:
+            db.begin()
+            try:
+                self._check_relationship_cycle(node)
+                results, meta = self.source.cypher(stmt, params)
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                raise e
+        else:
+            results, meta = self.source.cypher(stmt, params)
+        return results, meta
 
     @check_source
     def connect(self, node, properties=None):
@@ -89,9 +108,6 @@ class RelationshipManager(object):
         if not self.definition['model'] and properties:
             raise NotImplementedError("Relationship properties without " +
                     "using a relationship model is no longer supported")
-
-        if 'acyclic' in self.definition and self.definition['acyclic']:
-            self._check_relationship_cycle(node)
 
         params = {}
         rel_model = self.definition['model']
@@ -116,10 +132,10 @@ class RelationshipManager(object):
         params['them'] = node.id
 
         if not rel_model:
-            self.source.cypher(q, params)
+            self._connect_node(node, q, params)
             return True
 
-        rel_ = self.source.cypher(q + " RETURN r", params)[0][0][0]
+        rel_ = self._connect_node(node, q + " RETURN r", params)[0][0][0]
         rel_instance = self._set_start_end_cls(rel_model.inflate(rel_), node)
 
         if hasattr(rel_instance, 'post_save'):
@@ -213,7 +229,7 @@ class RelationshipManager(object):
             q += " SET r2.{} = r.{}".format(p, p)
         q += " WITH r DELETE r"
 
-        self.source.cypher(q, {'old': old_node.id, 'new': new_node.id})
+        self._connect_node(new_node, q, {'old': old_node.id, 'new': new_node.id})
 
     @check_source
     def disconnect(self, node):
