@@ -425,7 +425,7 @@ class QueryBuilder(object):
                             if subclass.__name__ == label:
                                 viable_subclasses.append(subclass)
                     # Filter out subclasses that are base classes for other subclasses
-                    subclass_filter = lambda x: not(set(x.__subclasses__)-set(viable_subclasses))
+                    subclass_filter = lambda x: not(set(x.__subclasses__())-set(viable_subclasses))
                     viable_subclasses = list(filter(subclass_filter, viable_subclasses))
                     assert len(viable_subclasses) <= 1,\
                         "Got 2 possible subclasses for label list {}, don't know what to do. Subclasses: {}".format(
