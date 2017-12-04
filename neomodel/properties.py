@@ -165,6 +165,10 @@ class Property(object):
         self.label = label
         self.help_text = help_text
 
+        # Set any additional attributes based on kwargs
+        for key, value in kwargs.items():
+            setattr(self, key, value)
+
     def default_value(self):
         """
         Generate a default value
